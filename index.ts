@@ -70,7 +70,7 @@ function sleep(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function WrapJSFunction(func: Function, argumentCount: number): Deno.UnsafeCallback<{
+function WrapJSFunction(func: Function): Deno.UnsafeCallback<{
     readonly parameters: readonly ["pointer"];
     readonly result: "i32";
 }>
@@ -84,6 +84,8 @@ function WrapJSFunction(func: Function, argumentCount: number): Deno.UnsafeCallb
         // L is the lua state
         (L: Deno.PointerValue) => {
 
+
+            let argumentCount = lua.symbols.lua_gettop(L);
             let args = new Array<any>();
 
             for (let i = argumentCount; i >= 1; i--) {
@@ -122,7 +124,7 @@ function WrapJSFunction(func: Function, argumentCount: number): Deno.UnsafeCallb
 
     const testFunc = WrapJSFunction((...args: any[]) => {
         console.log(`lua said:`, ...args);
-    }, 3)
+    })
 
     lua.symbols.lua_pushcclosure(LuaState, testFunc.pointer, 0); // push a closure to the stack
 
