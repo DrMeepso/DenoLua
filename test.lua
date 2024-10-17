@@ -1,3 +1,2 @@
-print("Hello world!")
-print("Hello world 1")
-test("hello", "world", "how are we?")
+print("Lua in Deno")
+test("hello", nil, false, math.pi, {})

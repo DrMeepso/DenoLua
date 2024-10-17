@@ -16,7 +16,11 @@ const lua = Deno.dlopen(
         "lua_iscfunction": { parameters: ["pointer", "i32"], result: "i32" },
         "lua_gettop": { parameters: ["pointer"], result: "i32" },
         "lua_tolstring": { parameters: ["pointer", "i32", "pointer"], result: "pointer" },
+        "lua_toboolean": { parameters: ["pointer", "i32"], result: "i32" },
+        "lua_tonumberx": { parameters: ["pointer", "i32", "pointer"], result: "f64" },
         "lua_type": { parameters: ["pointer", "i32"], result: "i32" },
+        "lua_next": { parameters: ["pointer", "i32"], result: "i32" },
+        "lua_pushnil": { parameters: ["pointer"], result: "void" },
     }
 );
 
@@ -70,6 +74,65 @@ function sleep(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+enum LuaType {
+    LUA_TNONE = -1,
+    LUA_TNIL = 0,
+    LUA_TBOOLEAN = 1,
+    LUA_TLIGHTUSERDATA = 2,
+    LUA_TNUMBER = 3,
+    LUA_TSTRING = 4,
+    LUA_TTABLE = 5,
+    LUA_TFUNCTION = 6,
+    LUA_TUSERDATA = 7,
+    LUA_TTHREAD = 8,
+}
+
+function ReadValue(L: Deno.PointerValue, stackIndex: number): any {
+
+    const argType = lua.symbols.lua_type(L, stackIndex);
+    switch (argType) {
+        case LuaType.LUA_TNIL: { // LUA_TNIL
+            return null;
+        }
+        case LuaType.LUA_TBOOLEAN: { // LUA_TBOOLEAN
+            const value = lua.symbols.lua_toboolean(L, stackIndex);
+            return value != 0
+        }
+        case LuaType.LUA_TNUMBER: { // LUA_TNUMBER
+            return lua.symbols.lua_tonumberx(L, stackIndex, null)
+        }
+        case LuaType.LUA_TSTRING: { // LUA_TSTRING
+            const lengthBuffer = new Uint8Array(4)
+            const msg = lua.symbols.lua_tolstring(L, stackIndex, Deno.UnsafePointer.of(lengthBuffer));
+            const length = new DataView(lengthBuffer.buffer).getInt32(0, true);
+            // @ts-ignore errors
+            const buffer = new Deno.UnsafePointerView(msg).getArrayBuffer(length, 0);
+            return new TextDecoder().decode(buffer)
+        }
+        case LuaType.LUA_TTABLE: { // LUA_TTABLE
+
+
+
+        } 
+        break;
+        default: {
+            // get the name of the type
+            const typeName = LuaType[argType];
+            console.log(`Unknown type: ${typeName}`);
+            return null;
+        }
+    }
+
+}
+
+// read the table at the top of the stack and return it as a JavaScript object
+async function ReadTable(luaState: Deno.PointerValue, tableStackIndex: number): Promise<any> {
+    const table = {};
+    
+    
+
+}
+
 function WrapJSFunction(func: Function): Deno.UnsafeCallback<{
     readonly parameters: readonly ["pointer"];
     readonly result: "i32";
@@ -84,22 +147,11 @@ function WrapJSFunction(func: Function): Deno.UnsafeCallback<{
         // L is the lua state
         (L: Deno.PointerValue) => {
 
-
             let argumentCount = lua.symbols.lua_gettop(L);
             let args = new Array<any>();
 
             for (let i = argumentCount; i >= 1; i--) {
-                const argType = lua.symbols.lua_type(L, -i);
-                switch (argType) {
-                    case 4: { // LUA_TSTRING
-                        const lengthBuffer = new Uint8Array(4)
-                        const msg = lua.symbols.lua_tolstring(L, -i, Deno.UnsafePointer.of(lengthBuffer));
-                        const length = new DataView(lengthBuffer.buffer).getInt32(0, true);
-                        // @ts-ignore errors
-                        const buffer = new Deno.UnsafePointerView(msg).getArrayBuffer(length, 0);
-                        args.push(new TextDecoder().decode(buffer));
-                    }
-                }
+                args.push(ReadValue(L, -i));
             }
 
             //console.log(args);
@@ -146,8 +198,7 @@ function WrapJSFunction(func: Function): Deno.UnsafeCallback<{
         await sleep(10); // wait for the code to be executed
 
         lua.symbols.lua_close(LuaState); // close the Lua state
-        testFunc.close(); // release the closure
-
+        testFunc.close(); // release the function pointer
     })
 
 })()
