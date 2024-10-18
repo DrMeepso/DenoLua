@@ -8,4 +8,5 @@ local testTable = {
         "hello", "world"
     }
 }
-test("hello", nil, false, math.pi, testTable)
+print("hello", nil, false, math.pi, testTable)
+print(sin(12)() == math.sin(12))

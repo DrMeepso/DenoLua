@@ -24,6 +24,12 @@ const lua = Deno.dlopen(
         "lua_pushnil": { parameters: ["pointer"], result: "void" },
         //"lua_pop": { parameters: ["pointer", "i32"], result: "void" },
         "lua_settop": { parameters: ["pointer", "i32"], result: "void" },
+        "lua_pushboolean": { parameters: ["pointer", "i32"], result: "void" },
+        "lua_pushnumber": { parameters: ["pointer", "f64"], result: "void" },
+        "lua_pushstring": { parameters: ["pointer", "buffer"], result: "void" },
+        "lua_createtable": { parameters: ["pointer", "i32", "i32"], result: "void" },
+        "lua_settable": { parameters: ["pointer", "i32"], result: "void" },
+        "lua_gettable": { parameters: ["pointer", "i32"], result: "void" },
     }
 );
 
@@ -135,6 +141,8 @@ function ReadTable(L: Deno.PointerValue, tableStackIndex: number): any {
     const luaArray = new Array<any>();
 
     let isArray = false
+    let hasStartedWithTable = false;
+    let arrayIndex = 1;
 
     // push nil to start the iteration
     lua.symbols.lua_pushnil(L);
@@ -148,8 +156,17 @@ function ReadTable(L: Deno.PointerValue, tableStackIndex: number): any {
         // get the key
         // make sure the key is a string
 
-        if (keyType == LuaType.LUA_TNUMBER) {
+        if (keyType == LuaType.LUA_TSTRING) {
+            hasStartedWithTable = true;
+        }
+
+        if (keyType == LuaType.LUA_TNUMBER && !hasStartedWithTable) {
             isArray = true;
+        }
+
+        if (isArray && keyType != LuaType.LUA_TNUMBER) {
+            console.error("Node Error: Incorrectly assumed table is an array!");
+            console.error(`Try not to use numbers as keys in the table!`);
         }
 
         if (keyType != LuaType.LUA_TSTRING && keyType != LuaType.LUA_TNUMBER) {
@@ -180,6 +197,46 @@ function ReadTable(L: Deno.PointerValue, tableStackIndex: number): any {
   
 }
 
+function WriteValue(L: Deno.PointerValue, value: any) {
+
+    if (value == null) {
+        lua.symbols.lua_pushnil(L);
+    } else if (typeof value == "boolean") {
+        lua.symbols.lua_pushboolean(L, value ? 1 : 0);
+    } else if (typeof value == "number") {
+        lua.symbols.lua_pushnumber(L, value);
+    } else if (typeof value == "string") {
+        lua.symbols.lua_pushstring(L, StringTooBuffer(value).buffer);
+    } else if (Array.isArray(value)) {
+        lua.symbols.lua_createtable(L, value.length, 0);
+        for (let i = 0; i < value.length; i++) {
+            lua.symbols.lua_pushnumber(L, i + 1);
+            WriteValue(L, value[i]);
+            lua.symbols.lua_settable(L, -3);
+        }
+    } else if (typeof value == "object") {
+        lua.symbols.lua_createtable(L, 0, Object.keys(value).length);
+        for (let key in value) {
+            lua.symbols.lua_pushstring(L, StringTooBuffer(key).buffer);
+            WriteValue(L, value[key]);
+            lua.symbols.lua_settable(L, -3);
+        }
+    } else if (typeof value == "function") {
+        // wrap the function in a closure
+        let func = WrapJSFunction(value);
+        lua.symbols.lua_pushcclosure(L, func.pointer, 0);
+
+    } else {
+        console.error(`Unsupported type: ${typeof value}`);
+    }
+
+}
+
+type LuaFunction = Deno.UnsafeCallback<{
+    readonly parameters: readonly ["pointer"];
+    readonly result: "i32";
+}>
+
 function WrapJSFunction(func: Function): Deno.UnsafeCallback<{
     readonly parameters: readonly ["pointer"];
     readonly result: "i32";
@@ -201,16 +258,20 @@ function WrapJSFunction(func: Function): Deno.UnsafeCallback<{
                 args.push(ReadValue(L, i));
             }
 
-            //console.log(args);
+            const valueReturn = func(...args);
 
-            func(...args);
-
-            return 0;
+            WriteValue(L, valueReturn);
+            return 1;
 
         }
     )
 
     return cFunctionPointer;
+}
+
+function pushWrapedFunctionToGlobal(L: Deno.PointerValue, func: LuaFunction, name: string) {
+    lua.symbols.lua_pushcclosure(L, func.pointer, 0); // push a closure to the stack
+    lua.symbols.lua_setglobal(L, StringTooBuffer(name).buffer); // set the global print function
 }
 
 (async () => {
@@ -221,15 +282,17 @@ function WrapJSFunction(func: Function): Deno.UnsafeCallback<{
 
     //await sleep(10); // wait for the stack to be checked
 
-    const testFunc = WrapJSFunction((...args: any[]) => {
+    const sin = WrapJSFunction((n: number) => {
+        return () => {
+            return Math.sin(n);
+        }
+    })
+    pushWrapedFunctionToGlobal(LuaState, sin, "sin");
+
+    const print = WrapJSFunction((...args: any[]) => {
         console.log(`Lua >`, ...args);
     })
-
-    // push c function to the top of the stack
-    lua.symbols.lua_pushcclosure(LuaState, testFunc.pointer, 0); // push a closure to the stack
-
-    // make item at top of the stack (the function) global
-    lua.symbols.lua_setglobal(LuaState, StringTooBuffer("test").buffer); // set the global print function
+    pushWrapedFunctionToGlobal(LuaState, print, "print");
 
     await sleep(10); // wait for the global function to be set
 
@@ -245,7 +308,9 @@ function WrapJSFunction(func: Function): Deno.UnsafeCallback<{
         await sleep(10); // wait for the code to be executed
 
         lua.symbols.lua_close(LuaState); // close the Lua state
-        testFunc.close(); // release the function pointer
+
+        print.close();
+        sin.close();
     })
 
 })()
