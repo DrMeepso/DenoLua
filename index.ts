@@ -1,5 +1,10 @@
 // import the DLL for lua 5.4
 
+// we are on 64 bit so the LUAI_MAXSTACK is 1000000
+const LUAI_MAXSTACK = 1000000;
+// LUA_REGISTRYINDEX is the index of the registry table!
+const LUA_REGISTRYINDEX = -LUAI_MAXSTACK - 1000;
+
 const lua = Deno.dlopen(
  
     "./lua54.dll",
@@ -30,6 +35,8 @@ const lua = Deno.dlopen(
         "lua_createtable": { parameters: ["pointer", "i32", "i32"], result: "void" },
         "lua_settable": { parameters: ["pointer", "i32"], result: "void" },
         "lua_gettable": { parameters: ["pointer", "i32"], result: "void" },
+        "luaL_ref": { parameters: ["pointer", "i32"], result: "i32" },
+        "lua_rawgeti": { parameters: ["pointer", "i32", "i32"], result: "void" },
     }
 );
 
@@ -100,6 +107,21 @@ enum LuaType {
     LUA_TTHREAD = 8,
 }
 
+function WrapLuaFunction(funcRef: number)
+{
+    return (...args: any[]) => {
+        lua.symbols.lua_rawgeti(LuaState, LUA_REGISTRYINDEX, funcRef);
+        for (let i = 0; i < args.length; i++) {
+            WriteValue(LuaState, args[i]);
+        }
+        const result = lua.symbols.lua_pcallk(LuaState, args.length, -1, 0);
+        if (result != 0) {
+            console.error(ReadError(LuaState));
+        }
+        return ReadValue(LuaState, -1);
+    }
+}
+
 function ReadValue(L: Deno.PointerValue, stackIndex: number): any {
 
     const argType = lua.symbols.lua_type(L, stackIndex);
@@ -124,7 +146,15 @@ function ReadValue(L: Deno.PointerValue, stackIndex: number): any {
         }
         case LuaType.LUA_TTABLE: { // LUA_TTABLE
             return ReadTable(L, stackIndex);
-        } 
+        }
+        case LuaType.LUA_TFUNCTION: { // LUA_TFUNCTION
+        
+            // make a reference to the function
+            const ref = lua.symbols.luaL_ref(L, LUA_REGISTRYINDEX);
+            return WrapLuaFunction(ref);
+            
+        }
+        break;
         default: {
             // get the name of the type
             const typeName = LuaType[argType];
@@ -142,7 +172,6 @@ function ReadTable(L: Deno.PointerValue, tableStackIndex: number): any {
 
     let isArray = false
     let hasStartedWithTable = false;
-    let arrayIndex = 1;
 
     // push nil to start the iteration
     lua.symbols.lua_pushnil(L);
@@ -282,10 +311,9 @@ function pushWrapedFunctionToGlobal(L: Deno.PointerValue, func: LuaFunction, nam
 
     //await sleep(10); // wait for the stack to be checked
 
-    const sin = WrapJSFunction((n: number) => {
-        return () => {
-            return Math.sin(n);
-        }
+    const sin = WrapJSFunction((f: Function) => {
+       let v = f("baller", true);
+       console.log(v);
     })
     pushWrapedFunctionToGlobal(LuaState, sin, "sin");
 
