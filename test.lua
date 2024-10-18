@@ -18,3 +18,7 @@ sin(function(a, b)
     print(a)
     return true == b
 end)
+
+print(pause())
+
+print("resumed")

@@ -37,6 +37,8 @@ const lua = Deno.dlopen(
         "lua_gettable": { parameters: ["pointer", "i32"], result: "void" },
         "luaL_ref": { parameters: ["pointer", "i32"], result: "i32" },
         "lua_rawgeti": { parameters: ["pointer", "i32", "i32"], result: "void" },
+        "lua_yieldk": { parameters: ["pointer", "i32", "i32"], result: "i32" },
+        "lua_resume": { parameters: ["pointer", "pointer", "i32"], result: "i32" },
     }
 );
 
@@ -152,7 +154,7 @@ function ReadValue(L: Deno.PointerValue, stackIndex: number): any {
             // make a reference to the function
             const ref = lua.symbols.luaL_ref(L, LUA_REGISTRYINDEX);
             return WrapLuaFunction(ref);
-            
+
         }
         break;
         default: {
@@ -303,6 +305,11 @@ function pushWrapedFunctionToGlobal(L: Deno.PointerValue, func: LuaFunction, nam
     lua.symbols.lua_setglobal(L, StringTooBuffer(name).buffer); // set the global print function
 }
 
+async function pushObjectToGlobal(L: Deno.PointerValue, obj: any, name: string) {
+    await WriteValue(L, obj);
+    await lua.symbols.lua_setglobal(L, StringTooBuffer(name).buffer);
+}
+
 (async () => {
 
     await lua.symbols.luaL_openlibs(LuaState); // open all standard libraries
@@ -313,7 +320,6 @@ function pushWrapedFunctionToGlobal(L: Deno.PointerValue, func: LuaFunction, nam
 
     const sin = WrapJSFunction((f: Function) => {
        let v = f("baller", true);
-       console.log(v);
     })
     pushWrapedFunctionToGlobal(LuaState, sin, "sin");
 
@@ -322,7 +328,33 @@ function pushWrapedFunctionToGlobal(L: Deno.PointerValue, func: LuaFunction, nam
     })
     pushWrapedFunctionToGlobal(LuaState, print, "print");
 
-    await sleep(10); // wait for the global function to be set
+    const pause = WrapJSFunction(async () => {
+        await sleep(1000);
+
+        console.log("Unpaused!");
+
+        return 0;
+    })
+
+    pushWrapedFunctionToGlobal(LuaState, pause, "pause");
+
+    let testObject = {
+        name: "baller",
+        age: 20,
+        isCool: true,
+        isNotCool: false,
+        testArray: [1, 2, 3, 4, 5],
+        func: () => {
+            return {
+                add: (a: number, b: number) => { return a + b; },
+                sub: (a: number, b: number) => { return a - b; },
+            }
+        }
+    }
+
+    await pushObjectToGlobal(LuaState, testObject, "testObject");
+
+    await sleep(100); // wait for the global function to be set
 
     Deno.readTextFile("./test.lua").then(async (code) => {
 
