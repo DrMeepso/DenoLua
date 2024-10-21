@@ -39,6 +39,7 @@ const lua = Deno.dlopen(
         "lua_rawgeti": { parameters: ["pointer", "i32", "i32"], result: "void" },
         "lua_yieldk": { parameters: ["pointer", "i32", "i32"], result: "i32" },
         "lua_resume": { parameters: ["pointer", "pointer", "i32"], result: "i32" },
+        "lua_newthread": { parameters: ["pointer"], result: "pointer" },
     }
 );
 
@@ -73,7 +74,7 @@ function StringTooBuffer(str: string): Uint8Array {
 
 }
 
-async function RunLuaString(luaState: Deno.PointerValue, code: string): Promise<number> {
+function RunLuaString(luaState: Deno.PointerValue, code: string): number {
 
     const buffer = StringTooBuffer(code);
     // load the code into the Lua state
@@ -85,12 +86,12 @@ async function RunLuaString(luaState: Deno.PointerValue, code: string): Promise<
         return v;
     }
 
-    await sleep(10); // wait for the code to be loaded
-    v = lua.symbols.lua_pcallk(luaState, 0, -1, 0);
+    v = lua.symbols.lua_resume(luaState, LuaThread, 0);
     return v;
 }
 
-const LuaState: Deno.PointerValue = lua.symbols.luaL_newstate(); // create a new Lua state
+const LuaThread: Deno.PointerValue = lua.symbols.luaL_newstate(); // create a new Lua state
+const LuaState: Deno.PointerValue = lua.symbols.lua_newthread(LuaThread); // create a new Lua state
 
 function sleep(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -254,7 +255,7 @@ function WriteValue(L: Deno.PointerValue, value: any) {
         }
     } else if (typeof value == "function") {
         // wrap the function in a closure
-        let func = WrapJSFunction(value);
+        const func = WrapJSFunction(value);
         lua.symbols.lua_pushcclosure(L, func.pointer, 0);
 
     } else {
@@ -358,7 +359,9 @@ async function pushObjectToGlobal(L: Deno.PointerValue, obj: any, name: string) 
 
     Deno.readTextFile("./test.lua").then(async (code) => {
 
-        let vm = await RunLuaString(LuaState, code); // run a simple lua code
+        let vm = RunLuaString(LuaState, code); // run a simple lua code
+
+        console.log("VM: ", vm);
 
         if (vm != 0) {
             console.log("Error running the Lua code!");
